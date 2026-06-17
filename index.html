@@ -157,6 +157,27 @@ body,
   max-height: var(--csv-bar-height);
 }
 
+.field-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.field-inline input[type='number'] {
+  width: 72px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
 .control-group {
   display: flex;
   flex-wrap: wrap;
@@ -569,6 +590,14 @@ body,
 
           </label>
 
+          <label class="field-inline" for="person-height">
+
+            <span>Person height (m)</span>
+
+            <input id="person-height" type="number" min="0.1" max="5" step="0.1" value="1.6" />
+
+          </label>
+
         </div>
 
 
@@ -655,7 +684,7 @@ body,
 
         <span id="filename">—</span>
 
-        <span id="version">overcurrents_webviewer_edgemesh_githubpaste_011</span>
+        <span id="version">overcurrents_webviewer_edgemesh_githubpaste_012</span>
 
       </footer>
 
@@ -3406,7 +3435,7 @@ function buildPostsFromRows(rows) {
   };
 }
 
-function computeBounds(segments) {
+function computeBoundsFromPoints(points) {
   let minX = Infinity;
   let minY = Infinity;
   let minZ = Infinity;
@@ -3414,15 +3443,13 @@ function computeBounds(segments) {
   let maxY = -Infinity;
   let maxZ = -Infinity;
 
-  for (const segment of segments) {
-    for (const point of [segment.start, segment.end]) {
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      minZ = Math.min(minZ, point.z);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-      maxZ = Math.max(maxZ, point.z);
-    }
+  for (const point of points) {
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    minZ = Math.min(minZ, point.z);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+    maxZ = Math.max(maxZ, point.z);
   }
 
   return {
@@ -3441,6 +3468,64 @@ function computeBounds(segments) {
   };
 }
 
+function expandBoundsWithPoint(bounds, point, radius) {
+  bounds.min.x = Math.min(bounds.min.x, point.x - radius);
+  bounds.min.y = Math.min(bounds.min.y, point.y - radius);
+  bounds.min.z = Math.min(bounds.min.z, point.z - radius);
+  bounds.max.x = Math.max(bounds.max.x, point.x + radius);
+  bounds.max.y = Math.max(bounds.max.y, point.y + radius);
+  bounds.max.z = Math.max(bounds.max.z, point.z + radius);
+}
+
+function finalizeBounds(bounds) {
+  bounds.center = {
+    x: (bounds.min.x + bounds.max.x) / 2,
+    y: (bounds.min.y + bounds.max.y) / 2,
+    z: (bounds.min.z + bounds.max.z) / 2,
+  };
+  bounds.size = {
+    x: bounds.max.x - bounds.min.x,
+    y: bounds.max.y - bounds.min.y,
+    z: bounds.max.z - bounds.min.z,
+  };
+  return bounds;
+}
+
+function computeArtworkBounds(tubes, posts) {
+  const bounds = {
+    min: { x: Infinity, y: Infinity, z: Infinity },
+    max: { x: -Infinity, y: -Infinity, z: -Infinity },
+  };
+
+  for (const tube of tubes) {
+    const radius = Math.max(tube.diameter / 2, 0.008);
+    expandBoundsWithPoint(bounds, tube.start, radius);
+    expandBoundsWithPoint(bounds, tube.end, radius);
+  }
+
+  for (const post of posts) {
+    const radius = Math.max(post.diameter / 2, 0.008);
+    expandBoundsWithPoint(bounds, post.start, radius);
+    expandBoundsWithPoint(bounds, post.end, radius);
+  }
+
+  if (!Number.isFinite(bounds.min.x)) {
+    return computeBoundsFromPoints([]);
+  }
+
+  return finalizeBounds(bounds);
+}
+
+function computeBounds(segments) {
+  const points = [];
+
+  for (const segment of segments) {
+    points.push(segment.start, segment.end);
+  }
+
+  return computeBoundsFromPoints(points);
+}
+
 function parseCSV(text) {
   const { headers, rows } = parseRows(text);
   const { tubes, lengthStats } = buildTubesFromEdgeRows(rows);
@@ -3453,7 +3538,7 @@ function parseCSV(text) {
     tubePairs,
     tubes,
     posts,
-    artworkBounds: computeBounds(tubes),
+    artworkBounds: computeArtworkBounds(tubes, posts),
     summary: {
       format: 'edgemesh',
       edgeRowCount: rows.length,
@@ -3466,7 +3551,7 @@ function parseCSV(text) {
       maxLengthDelta: lengthStats.maxLengthDelta,
       lengthTolerance: LENGTH_TOLERANCE,
     },
-    bounds: computeBounds([...tubes, ...posts]),
+    bounds: computeArtworkBounds(tubes, posts),
   };
 }
 
@@ -3854,6 +3939,34 @@ function buildPersonScaleFigure(options = {}) {
   );
   outline.renderOrder = 2;
   group.add(outline);
+
+  return group;
+}
+
+function buildPeopleScaleGroup(options = {}) {
+  const { height = DEFAULT_HEIGHT, bounds = null } = options;
+
+  const group = new THREE.Group();
+  group.name = 'people-scale';
+
+  const addPersonAt = (x, y, z) => {
+    const person = buildPersonScaleFigure({ height });
+    person.position.set(x, y, z);
+    group.add(person);
+  };
+
+  if (bounds) {
+    const { min, max } = bounds;
+    const groundY = min.y;
+
+    addPersonAt(0, groundY, 0);
+    addPersonAt(min.x, groundY, min.z);
+    addPersonAt(max.x, groundY, min.z);
+    addPersonAt(min.x, groundY, max.z);
+    addPersonAt(max.x, groundY, max.z);
+  } else {
+    addPersonAt(0, 0, 0);
+  }
 
   return group;
 }
@@ -4566,7 +4679,8 @@ function renderSelectionInfo(container, tube, isolateMode = false) {
   `;
 }
 
-const VERSION = 'overcurrents_webviewer_edgemesh_githubpaste_011';
+const VERSION = 'overcurrents_webviewer_edgemesh_githubpaste_012';
+const DEFAULT_PERSON_HEIGHT = 1.6;
 const CLICK_DRAG_THRESHOLD = 6;
 const CAMERA_ANIMATION_MS = 450;
 
@@ -4600,6 +4714,7 @@ const showPostsInput = document.getElementById('show-posts');
 const showPlanInput = document.getElementById('show-plan');
 const showBoundsInput = document.getElementById('show-bounds');
 const showPeopleInput = document.getElementById('show-people');
+const personHeightInput = document.getElementById('person-height');
 
 const canvas = document.getElementById('canvas');
 
@@ -4736,12 +4851,23 @@ function clearPeople() {
   peopleGroup = null;
 }
 
+function getPersonHeight() {
+  const value = Number.parseFloat(personHeightInput.value);
+  if (!Number.isFinite(value) || value <= 0) {
+    return DEFAULT_PERSON_HEIGHT;
+  }
+  return value;
+}
+
 function rebuildPeople() {
   clearPeople();
 
   if (!showPeopleInput.checked) return;
 
-  peopleGroup = buildPersonScaleFigure({ height: 1.6 });
+  peopleGroup = buildPeopleScaleGroup({
+    height: getPersonHeight(),
+    bounds: currentData?.artworkBounds ?? null,
+  });
   scene.add(peopleGroup);
 }
 
@@ -4966,6 +5092,7 @@ async function loadCSVText(text, displayName) {
   rebuildPosts();
   rebuildLabels();
   rebuildBounds();
+  rebuildPeople();
 
   csvViewer.setData(data);
 
@@ -5029,6 +5156,8 @@ showPostsInput.addEventListener('change', rebuildPosts);
 showPlanInput.addEventListener('change', rebuildPlan);
 showBoundsInput.addEventListener('change', rebuildBounds);
 showPeopleInput.addEventListener('change', rebuildPeople);
+personHeightInput.addEventListener('change', rebuildPeople);
+personHeightInput.addEventListener('input', rebuildPeople);
 showIndexesInput.addEventListener('change', () => {
   if (!isolateMode) rebuildLabels();
 });
